@@ -1,6 +1,6 @@
 {
   "name": "playlist-utils",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reorder YouTube playlists: sort presets plus manual drag and drop, remembered per playlist.",
   "private": true,
   "type": "module",
@@ -17,5 +17,6 @@
     "esbuild": "^0.25.5",
     "typescript": "^5.8.3",
     "web-ext": "^8.10.0"
-  }
+  },
+  "license": "MIT"
 }
