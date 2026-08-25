@@ -1,4 +1,8 @@
 {
+  "categories": ["photos-music-videos"],
+  "summary": {
+    "en-US": "Reorder YouTube playlists and keep the order you picked. Sort by date or views, or drag videos where you want them. Autoplay follows your order too."
+  },
   "version": {
     "license": "MIT"
   }
