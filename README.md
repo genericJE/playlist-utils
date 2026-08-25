@@ -73,6 +73,12 @@ capped per pass.
   pages first. On very long playlists that takes a moment.
 - On the new playlist-page layout, flexing the list adds ~16px of space at the
   very bottom (a collapsed margin that flex does not collapse).
+- **The page labels it reads are English-only.** The instant approximate sort,
+  and the upload-vs-publish check above, both parse YouTube's own
+  "3 weeks ago" / "481K views" text. If your YouTube renders in another
+  language they quietly do nothing: sorting still works and is still exact,
+  but it falls back to the upload date and skips the pre-sort. The values
+  fetched from the API are unaffected — those requests pin `hl=en`.
 
 ## Install
 
