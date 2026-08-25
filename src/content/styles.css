@@ -1,0 +1,272 @@
+:root {
+  --plu-surface: #ffffff;
+  --plu-text: #0f0f0f;
+  --plu-muted: #606060;
+  --plu-border: rgba(0, 0, 0, 0.12);
+  --plu-hover: rgba(0, 0, 0, 0.06);
+  --plu-chip: rgba(0, 0, 0, 0.07);
+  --plu-accent: #065fd4;
+  --plu-drag-bg: rgba(0, 0, 0, 0.06);
+}
+
+html[dark],
+html[data-color-scheme='dark'] {
+  --plu-surface: #232323;
+  --plu-text: #f1f1f1;
+  --plu-muted: #aaaaaa;
+  --plu-border: rgba(255, 255, 255, 0.16);
+  --plu-hover: rgba(255, 255, 255, 0.1);
+  --plu-chip: rgba(255, 255, 255, 0.12);
+  --plu-accent: #3ea6ff;
+  --plu-drag-bg: rgba(255, 255, 255, 0.09);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([light]):not([data-color-scheme='light']) {
+    --plu-surface: #232323;
+    --plu-text: #f1f1f1;
+    --plu-muted: #aaaaaa;
+    --plu-border: rgba(255, 255, 255, 0.16);
+    --plu-hover: rgba(255, 255, 255, 0.1);
+    --plu-chip: rgba(255, 255, 255, 0.12);
+    --plu-accent: #3ea6ff;
+    --plu-drag-bg: rgba(255, 255, 255, 0.09);
+  }
+}
+
+/* ---------------------------------------------------------------- list ---- */
+
+/* Ordering is done with CSS `order`, so YouTube's own DOM is never rearranged. */
+[data-plu-container] {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+[data-plu-row] {
+  position: relative;
+}
+
+/* Keeps the handle's z-index inside the row, so it cannot paint over
+   YouTube's sticky header when the row scrolls underneath it. */
+[data-plu-drag-ready] [data-plu-row] {
+  isolation: isolate;
+}
+
+[data-plu-row][data-plu-dragging] {
+  z-index: 30;
+  border-radius: 10px;
+  background: var(--plu-drag-bg);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  cursor: grabbing;
+}
+
+[data-plu-container][data-plu-dragging] [data-plu-row] a,
+[data-plu-container][data-plu-dragging] [data-plu-row] button {
+  pointer-events: none;
+}
+
+html[data-plu-dragging],
+html[data-plu-dragging] * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+html[data-plu-dragging] {
+  cursor: grabbing !important;
+}
+
+/* --------------------------------------------------------------- handle ---- */
+
+.plu-grip {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 22px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  color: var(--plu-muted);
+  opacity: 0.5;
+  border-radius: 6px;
+  cursor: grab;
+  /* Touch must not scroll the page when the gesture starts on the handle. */
+  touch-action: none;
+}
+
+.plu-grip::before {
+  content: '';
+  width: 10px;
+  height: 16px;
+  background-image: radial-gradient(currentColor 1.3px, transparent 1.4px);
+  background-size: 5px 5.4px;
+}
+
+@media (hover: hover) {
+  .plu-grip:hover {
+    opacity: 1;
+    background: var(--plu-hover);
+  }
+}
+
+[data-plu-row][data-plu-dragging] .plu-grip {
+  opacity: 1;
+  cursor: grabbing;
+}
+
+@media (pointer: coarse) {
+  .plu-grip {
+    width: 26px;
+    opacity: 0.75;
+  }
+}
+
+/* --------------------------------------------------------------- button ---- */
+
+.plu-holder {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.plu-holder--floating {
+  position: fixed;
+  inset-inline-end: 16px;
+  inset-block-end: 84px;
+  z-index: 2147482000;
+}
+
+.plu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  margin: 4px 8px 4px 0;
+  padding: 0 12px;
+  min-height: 34px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--plu-chip);
+  color: var(--plu-text);
+  font: 500 12px/1 'Roboto', system-ui, sans-serif;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+@media (hover: hover) {
+  .plu-button:hover {
+    background: var(--plu-hover);
+  }
+}
+
+.plu-button.is-active {
+  color: var(--plu-accent);
+}
+
+.plu-holder--floating .plu-button {
+  margin: 0;
+  min-height: 40px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  background: var(--plu-surface);
+  border: 1px solid var(--plu-border);
+}
+
+/* ----------------------------------------------------------------- menu ---- */
+
+.plu-menu {
+  position: fixed;
+  z-index: 2147483000;
+  box-sizing: border-box;
+  min-width: 262px;
+  max-width: min(340px, calc(100vw - 16px));
+  max-height: min(72vh, 620px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+  border: 1px solid var(--plu-border);
+  border-radius: 12px;
+  background: var(--plu-surface);
+  color: var(--plu-text);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.4);
+  font: 400 13px/1.35 'Roboto', system-ui, sans-serif;
+}
+
+.plu-menu--sheet {
+  inset-inline: 8px;
+  inset-block-end: 12px;
+  top: auto !important;
+  left: 8px !important;
+  max-width: none;
+}
+
+.plu-menu__title {
+  padding: 6px 8px 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.plu-menu__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  margin: 0;
+  padding: 9px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .plu-menu__item:hover {
+    background: var(--plu-hover);
+  }
+}
+
+.plu-menu__tick {
+  flex: 0 0 16px;
+  display: flex;
+  justify-content: center;
+  padding-top: 1px;
+  color: var(--plu-accent);
+}
+
+.plu-menu__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plu-menu__label {
+  font-weight: 500;
+}
+
+.plu-menu__hint {
+  color: var(--plu-muted);
+  font-size: 11.5px;
+}
+
+.plu-menu__divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--plu-border);
+}
+
+.plu-menu__status {
+  padding: 4px 8px 8px;
+  color: var(--plu-muted);
+  font-size: 12px;
+}
+
+.plu-menu__item--danger .plu-menu__label {
+  color: #ff6b6b;
+}
