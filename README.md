@@ -82,21 +82,34 @@ capped per pass.
 
 ## Install
 
-The extension is unsigned, so Firefox release will only load it temporarily.
-
-**Desktop** — `about:debugging#/runtime/this-firefox` → *Load Temporary Add-on*
-→ pick `dist/manifest.json`. Gone when Firefox restarts.
-
-**Android** — enable *Settings → Advanced → Remote debugging via USB*, plug the
-phone in, then:
+**Desktop — permanent.** Firefox release refuses unsigned extensions, so the
+add-on is signed by AMO as an *unlisted* add-on and installed from the file:
 
 ```bash
+printf 'WEB_EXT_API_KEY=user:…\nWEB_EXT_API_SECRET=…\n' > ~/.amo-credentials
+chmod 600 ~/.amo-credentials
+set -a; . ~/.amo-credentials; set +a
+npm run sign          # -> web-ext-artifacts/*.xpi
+open -a Firefox web-ext-artifacts/playlist-utils-0.1.0.xpi
+```
+
+Firefox prompts once, and the add-on then lives in the profile permanently
+(`signedState: 2`, `location: app-profile`). Bump `version` in `manifest.json`
+before re-signing — AMO rejects a version it has already seen.
+
+**Android — temporary only.** Firefox for Android cannot install an XPI from a
+file or a URL at any signing level: it offers to *download* the file, and no
+activity is registered for `application/x-xpinstall`. Installs are restricted
+to addons.mozilla.org. So the add-on is side-loaded over USB, which lasts until
+Firefox on the phone restarts:
+
+```bash
+# Settings -> Advanced -> Remote debugging via USB must be on
 npm run build && npm run start:android
 ```
 
-For an install that survives a restart the add-on has to be signed by
-addons.mozilla.org (`web-ext sign --channel=unlisted`), which needs an AMO API
-key.
+Making that permanent would mean submitting the add-on to AMO as a **listed**
+add-on, which puts it through public review and lists it publicly.
 
 ## Development
 
