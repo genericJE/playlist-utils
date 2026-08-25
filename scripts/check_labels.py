@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Compares each row's "X ago" label against the exact publish date, and pulls
 an independent date string from the `next` endpoint for the disputed videos."""
-import json, re, sys, urllib.request
+import json, re, sys
 from datetime import datetime, timezone
 
-KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
-CTX = {"client": {"clientName": "WEB", "clientVersion": "2.20260824.10.00", "hl": "en", "gl": "US"}}
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import innertube
 sc = sys.argv[1]
 rows = json.loads(json.load(open(f"{sc}/phone_order2.json"))["result"])
 meta = json.load(open(f"{sc}/truth.json"))
@@ -44,11 +45,7 @@ for r, exp, got in bad:
     print(f"  {r['id']} {meta[r['id']]['publishDate'][:10]} label={got!r} expected={exp!r} status={st} :: {r['title']}")
 
 def next_date(vid):
-    body = json.dumps({"context": CTX, "videoId": vid}).encode()
-    req = urllib.request.Request(
-        f"https://www.youtube.com/youtubei/v1/next?key={KEY}&prettyPrint=false",
-        data=body, headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
-    j = json.load(urllib.request.urlopen(req, timeout=25))
+    j = json.loads(innertube.call("next", vid, timeout=25))
     hits = set(re.findall(r'"(?:dateText|publishDate|relativeDateText)":\{"simpleText":"([^"]+)"', json.dumps(j)))
     hits |= set(re.findall(r'"publishDate":"([^"]+)"', json.dumps(j)))
     return sorted(hits)[:6]

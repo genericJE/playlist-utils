@@ -20,6 +20,8 @@ export interface PlaylistPrefs {
 export interface Settings {
   /** Master switch for the drag handles. */
   dragEnabled: boolean;
+  /** Whether playlist navigation should follow this order instead of YouTube's. */
+  autoplayFollowsOrder: boolean;
 }
 
 const PREFS_PREFIX = 'pl:';
@@ -27,7 +29,7 @@ const META_PREFIX = 'm2:';
 const SETTINGS_KEY = 'settings';
 
 const DEFAULT_PREFS: PlaylistPrefs = { mode: 'original', custom: null, updatedAt: 0 };
-const DEFAULT_SETTINGS: Settings = { dragEnabled: true };
+const DEFAULT_SETTINGS: Settings = { dragEnabled: true, autoplayFollowsOrder: true };
 
 function isMode(value: unknown): value is SortMode {
   return value === 'original' || value === 'reverse' || value === 'chrono'
@@ -62,7 +64,12 @@ export async function setPrefs(playlistId: string, prefs: PlaylistPrefs): Promis
 export async function getSettings(): Promise<Settings> {
   try {
     const raw = (await storage.get(SETTINGS_KEY))[SETTINGS_KEY] as Partial<Settings> | undefined;
-    return { dragEnabled: typeof raw?.dragEnabled === 'boolean' ? raw.dragEnabled : DEFAULT_SETTINGS.dragEnabled };
+    return {
+      dragEnabled: typeof raw?.dragEnabled === 'boolean' ? raw.dragEnabled : DEFAULT_SETTINGS.dragEnabled,
+      autoplayFollowsOrder: typeof raw?.autoplayFollowsOrder === 'boolean'
+        ? raw.autoplayFollowsOrder
+        : DEFAULT_SETTINGS.autoplayFollowsOrder,
+    };
   } catch (err) {
     warn('failed to read settings', err);
     return { ...DEFAULT_SETTINGS };

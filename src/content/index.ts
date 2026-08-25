@@ -1,3 +1,4 @@
+import { installAutoplay } from './autoplay';
 import { attachDrag, detachDrag, ensureGrips } from './dnd';
 import { log, warn } from './log';
 import { buttonMounted, mountButton, refreshMenu, unmountButton, updateButtonLabel } from './menu';
@@ -25,7 +26,7 @@ const CONTINUATION_ROUNDS = 25;
 let page: PageInfo | null = null;
 let surface: Surface | null = null;
 let prefs: PlaylistPrefs = { mode: 'original', custom: null, updatedAt: 0 };
-let settings: Settings = { dragEnabled: true };
+let settings: Settings = { dragEnabled: true, autoplayFollowsOrder: true };
 let statusText: string | null = null;
 let lastOrder: string[] = [];
 let generation = 0;
@@ -179,6 +180,7 @@ const callbacks: MenuCallbacks = {
     mode: prefs.mode,
     hasCustom: (prefs.custom?.length ?? 0) > 0,
     dragEnabled: settings.dragEnabled,
+    autoplayFollowsOrder: settings.autoplayFollowsOrder,
     status: statusText,
   }),
   onSelectMode: (mode: SortMode) => {
@@ -192,6 +194,10 @@ const callbacks: MenuCallbacks = {
     settings = { ...settings, dragEnabled: enabled };
     void setSettings(settings);
     syncDrag();
+  },
+  onToggleAutoplay: (enabled: boolean) => {
+    settings = { ...settings, autoplayFollowsOrder: enabled };
+    void setSettings(settings);
   },
   onResetCustom: () => {
     if (!page) return;
@@ -314,6 +320,12 @@ function watchdog(): void {
   // rebuilding the list container or the header the button lives in.
   if (!surface || !surface.container.isConnected || !buttonMounted()) refresh();
 }
+
+installAutoplay({
+  enabled: () => settings.autoplayFollowsOrder && page?.kind === 'watch' && lastOrder.length > 1,
+  order: () => lastOrder,
+  container: () => surface?.container ?? null,
+});
 
 window.addEventListener('yt-navigate-finish', () => void boot());
 window.addEventListener('popstate', () => void boot());

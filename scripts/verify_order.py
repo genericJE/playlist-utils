@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """Fetches exact publish dates for a playlist and diffs them against the order
 the extension actually applied on the device."""
-import json, sys, urllib.request
+import json, sys
 from concurrent.futures import ThreadPoolExecutor
 
-KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
-CTX = {"client": {"clientName": "WEB", "clientVersion": "2.20260824.10.00", "hl": "en", "gl": "US"}}
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import innertube
+
 
 def fetch(vid):
-    body = json.dumps({"context": CTX, "videoId": vid}).encode()
-    req = urllib.request.Request(
-        f"https://www.youtube.com/youtubei/v1/player?key={KEY}&prettyPrint=false",
-        data=body, headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
     try:
-        j = json.load(urllib.request.urlopen(req, timeout=25))
+        j = json.loads(innertube.call("player", vid, timeout=25))
     except Exception as e:
         return vid, {"error": str(e)}
     mf = (j.get("microformat") or {}).get("playerMicroformatRenderer") or {}

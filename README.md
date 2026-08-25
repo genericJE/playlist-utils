@@ -17,11 +17,11 @@ An **Order** button appears next to YouTube's own playlist controls, both on the
 
 Every row also gets a grab handle, so you can drag videos wherever you want them. On a phone, drag the handle or press and hold a row. Whatever you choose is saved per playlist and comes back next time.
 
+Autoplay follows your order as well, along with the next and previous buttons. If you would rather leave that to YouTube, there is a switch for it in the menu.
+
 Works on desktop Firefox and on Firefox for Android.
 
 ## Things worth knowing
-
-Autoplay still follows YouTube's order, not yours. The extension changes what you see; YouTube picks the next video from its own state, which it does not expose.
 
 Sorting by date or views needs numbers YouTube does not always render, so those come from the same internal API the site itself calls, without credentials, and are cached. Sorting a long playlist for the first time takes a moment.
 

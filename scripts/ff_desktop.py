@@ -22,6 +22,9 @@ user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
 user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("extensions.autoDisableScopes", 0);
+user_pref("media.autoplay.default", 0);
+user_pref("media.autoplay.blocking_policy", 0);
+user_pref("media.autoplay.block-webaudio", false);
 """.strip())
 
 def launch(profile, url):

@@ -16,6 +16,7 @@ export interface MenuState {
   mode: SortMode;
   hasCustom: boolean;
   dragEnabled: boolean;
+  autoplayFollowsOrder: boolean;
   /** Transient line under the options, e.g. date-fetch progress. */
   status: string | null;
 }
@@ -24,6 +25,7 @@ export interface MenuCallbacks {
   getState(): MenuState;
   onSelectMode(mode: SortMode): void;
   onToggleDrag(enabled: boolean): void;
+  onToggleAutoplay(enabled: boolean): void;
   onResetCustom(): void;
 }
 
@@ -129,6 +131,35 @@ function optionRow(mode: SortMode, state: MenuState): HTMLElement {
   return item;
 }
 
+function toggleRow(label: string, hint: string, on: boolean, onPick: () => void): HTMLElement {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'plu-menu__item plu-menu__item--toggle';
+
+  const tick = document.createElement('span');
+  tick.className = 'plu-menu__tick';
+  if (on) tick.appendChild(CHECK_ICON());
+
+  const text = document.createElement('span');
+  text.className = 'plu-menu__text';
+  const title = document.createElement('span');
+  title.className = 'plu-menu__label';
+  title.textContent = label;
+  const sub = document.createElement('span');
+  sub.className = 'plu-menu__hint';
+  sub.textContent = hint;
+  text.append(title, sub);
+
+  item.append(tick, text);
+  item.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onPick();
+    closeMenu();
+  });
+  return item;
+}
+
 function buildMenu(state: MenuState): HTMLElement {
   const root = document.createElement('div');
   root.className = MENU_CLASS;
@@ -154,29 +185,19 @@ function buildMenu(state: MenuState): HTMLElement {
   divider.className = 'plu-menu__divider';
   root.appendChild(divider);
 
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'plu-menu__item plu-menu__item--toggle';
-  const toggleTick = document.createElement('span');
-  toggleTick.className = 'plu-menu__tick';
-  if (state.dragEnabled) toggleTick.appendChild(CHECK_ICON());
-  const toggleText = document.createElement('span');
-  toggleText.className = 'plu-menu__text';
-  const toggleLabel = document.createElement('span');
-  toggleLabel.className = 'plu-menu__label';
-  toggleLabel.textContent = 'Drag to reorder';
-  const toggleHint = document.createElement('span');
-  toggleHint.className = 'plu-menu__hint';
-  toggleHint.textContent = 'Grab the handle, or press and hold a row';
-  toggleText.append(toggleLabel, toggleHint);
-  toggle.append(toggleTick, toggleText);
-  toggle.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    callbacks?.onToggleDrag(!state.dragEnabled);
-    closeMenu();
-  });
-  root.appendChild(toggle);
+  root.appendChild(toggleRow(
+    'Drag to reorder',
+    'Grab the handle, or press and hold a row',
+    state.dragEnabled,
+    () => callbacks?.onToggleDrag(!state.dragEnabled),
+  ));
+
+  root.appendChild(toggleRow(
+    'Autoplay follows this order',
+    'Next and previous use your order, not YouTube\'s',
+    state.autoplayFollowsOrder,
+    () => callbacks?.onToggleAutoplay(!state.autoplayFollowsOrder),
+  ));
 
   if (state.hasCustom) {
     const reset = document.createElement('button');

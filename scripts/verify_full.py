@@ -4,12 +4,13 @@
 Mirrors the extension's own rule: sort by upload date, except where YouTube's
 "x ago" label contradicts it, in which case use the displayed publish date.
 """
-import json, re, sys, urllib.request
+import json, re, sys
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
-KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
-CTX = {"client": {"clientName": "WEB", "clientVersion": "2.20260824.10.00", "hl": "en", "gl": "US"}}
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import innertube
 MONTHS = {m: i for i, m in enumerate(
     ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"])}
 UNITS = [(r"^sec", 1e3), (r"^min", 6e4), (r"^(hour|hr)", 3.6e6), (r"^day", 8.64e7),
@@ -43,10 +44,7 @@ def parse_date_text(t):
     return datetime(int(m.group(3)), mon + 1, int(m.group(2)), 12, tzinfo=timezone.utc).timestamp() * 1000
 
 def displayed(vid):
-    body = json.dumps({"context": CTX, "videoId": vid}).encode()
-    req = urllib.request.Request(f"https://www.youtube.com/youtubei/v1/next?key={KEY}&prettyPrint=false",
-        data=body, headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
-    raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+    raw = innertube.call("next", vid)
     for pat in [r'"dateText":\{"simpleText":"([^"]+)"', r'"publishDate":\{"runs":\[\{"text":"([^"]+)"']:
         m = re.search(pat, raw)
         if m:

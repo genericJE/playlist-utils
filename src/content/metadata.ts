@@ -2,8 +2,6 @@ import { cacheMeta, getCachedMeta } from './store';
 import type { VideoMeta } from './store';
 import { warn } from './log';
 
-/** Public InnerTube web key; only used if the page's own config cannot be read. */
-const FALLBACK_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 const FALLBACK_CLIENT_VERSION = '2.20240101.00.00';
 const CONCURRENCY = 4;
 /** Publish dates are immutable; view counts are re-fetched after this long. */
@@ -23,14 +21,15 @@ interface InnertubeConfig {
   clientVersion: string;
 }
 
-let configCache: InnertubeConfig | null = null;
+/** undefined = not looked up yet, null = the page did not expose a key. */
+let configCache: InnertubeConfig | null | undefined;
 
 /**
  * Reads ytcfg out of the inline scripts. The values live in page markup, which
  * an isolated content script can read, unlike the page's `window.ytcfg`.
  */
-function innertubeConfig(): InnertubeConfig {
-  if (configCache) return configCache;
+function innertubeConfig(): InnertubeConfig | null {
+  if (configCache !== undefined) return configCache;
 
   let apiKey: string | undefined;
   let clientName: string | undefined;
@@ -45,11 +44,17 @@ function innertubeConfig(): InnertubeConfig {
     if (apiKey && clientName && clientVersion) break;
   }
 
-  configCache = {
-    apiKey: apiKey ?? FALLBACK_API_KEY,
-    clientName: clientName ?? (location.hostname.startsWith('m.') ? 'MWEB' : 'WEB'),
-    clientVersion: clientVersion ?? FALLBACK_CLIENT_VERSION,
-  };
+  // No key is bundled: it is read from the page YouTube already served us. If
+  // it is not there, the exact lookups are skipped and sorting falls back to
+  // the approximate values scraped from the page.
+  configCache = apiKey
+    ? {
+        apiKey,
+        clientName: clientName ?? (location.hostname.startsWith('m.') ? 'MWEB' : 'WEB'),
+        clientVersion: clientVersion ?? FALLBACK_CLIENT_VERSION,
+      }
+    : null;
+  if (!configCache) warn('InnerTube config not found on this page; exact metadata is unavailable');
   return configCache;
 }
 
@@ -61,6 +66,7 @@ function innertubeConfig(): InnertubeConfig {
  */
 async function fetchMeta(videoId: string): Promise<VideoMeta | null> {
   const config = innertubeConfig();
+  if (!config) return null;
   try {
     const response = await fetch(
       `${location.origin}/youtubei/v1/player?key=${encodeURIComponent(config.apiKey)}&prettyPrint=false`,
@@ -269,6 +275,7 @@ const DISPLAYED_DATE_PATTERNS: RegExp[] = [
  */
 async function fetchDisplayedDate(videoId: string): Promise<number | null> {
   const config = innertubeConfig();
+  if (!config) return null;
   try {
     const response = await fetch(
       `${location.origin}/youtubei/v1/next?key=${encodeURIComponent(config.apiKey)}&prettyPrint=false`,
