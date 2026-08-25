@@ -42,6 +42,5 @@ npm run build
 
 `npm run typecheck` for types, `npm run watch` while working.
 
-## Licence
 
-MIT.
+If anything here ends up being useful to you and you feel like saying thanks, my PayPal is https://paypal.me/genericJE. Truly no expectation either way, just leaving the option here in case.
