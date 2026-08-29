@@ -57,13 +57,16 @@ function gutterWidth(): number {
  * Widens the row's leading padding to make room for the handle. The original
  * value is measured and stored so the gutter adds to YouTube's own padding
  * instead of replacing it, and so it can be restored exactly.
+ *
+ * The measurement is passed in rather than taken here: reading a resolved style
+ * flushes pending layout, so ensureGrips takes every reading before it makes
+ * any write instead of reflowing the list once per row.
  */
-function addGutter(el: HTMLElement): void {
+function addGutter(el: HTMLElement, original: string, gutter: number): void {
   if (el.dataset[PAD_DATA_KEY] !== undefined) return;
-  const original = getComputedStyle(el).paddingLeft;
   el.dataset[PAD_DATA_KEY] = original;
   const parsed = Number.parseFloat(original);
-  el.style.paddingLeft = `${(Number.isFinite(parsed) ? parsed : 0) + gutterWidth()}px`;
+  el.style.paddingLeft = `${(Number.isFinite(parsed) ? parsed : 0) + gutter}px`;
 }
 
 function removeGutter(el: HTMLElement): void {
@@ -75,14 +78,27 @@ function removeGutter(el: HTMLElement): void {
 
 /** Adds the grab handle to every row that does not have one yet. */
 export function ensureGrips(surface: Surface): void {
+  const pending: Array<{ el: HTMLElement; padding: string; needsGrip: boolean }> = [];
   for (const row of surface.rows) {
-    addGutter(row.el);
-    if (row.el.querySelector(`:scope > .${GRIP_CLASS}`)) continue;
+    const el = row.el;
+    const needsGrip = el.querySelector(`:scope > .${GRIP_CLASS}`) === null;
+    const needsGutter = el.dataset[PAD_DATA_KEY] === undefined;
+    if (!needsGrip && !needsGutter) continue;
+    // Per row, never once for the list: the watch panel gives the now-playing
+    // row its own padding, and reusing one reading would misalign it.
+    pending.push({ el, padding: needsGutter ? getComputedStyle(el).paddingLeft : '', needsGrip });
+  }
+  if (pending.length === 0) return;
+
+  const gutter = gutterWidth();
+  for (const { el, padding, needsGrip } of pending) {
+    addGutter(el, padding, gutter);
+    if (!needsGrip) continue;
     const grip = document.createElement('div');
     grip.className = GRIP_CLASS;
     grip.setAttribute('role', 'button');
     grip.setAttribute('aria-label', 'Drag to reorder');
-    row.el.appendChild(grip);
+    el.appendChild(grip);
   }
 }
 
@@ -361,6 +377,11 @@ function install(): void {
   document.addEventListener('touchmove', onTouchMove, { passive: false });
   document.addEventListener('click', onClickCapture, true);
   document.addEventListener('contextmenu', onContextMenu, true);
+}
+
+/** True mid-gesture, so nothing re-sorts the list out from under the pointer. */
+export function dragActive(): boolean {
+  return active !== null;
 }
 
 export function attachDrag(surface: Surface, hooks: DragHooks): void {

@@ -72,16 +72,31 @@ function classOf(el: Element): string {
  * the Polymer `.data` property is not reachable and every source here has to be
  * markup the page actually rendered.
  */
-export function videoIdOf(row: HTMLElement): string | null {
-  const tagged = row.querySelector('[class*="content-id-"]');
-  if (tagged) {
-    const match = /content-id-([\w-]{6,})/.exec(classOf(tagged));
-    if (match) return match[1] ?? null;
+function idFromHref(href: string | null): string | null {
+  const match = /[?&]v=([\w-]{11})(?:&|$)/.exec(href ?? '');
+  return match ? match[1] ?? null : null;
+}
+
+export function videoIdOf(row: HTMLElement, probeContentId = true): string | null {
+  // The content-id class exists only on the lockup layout, and matching an
+  // attribute substring across a row's whole subtree is the most expensive
+  // probe here, so the caller skips it once it is known not to apply.
+  if (probeContentId) {
+    const tagged = row.querySelector('[class*="content-id-"]');
+    if (tagged) {
+      const match = /content-id-([\w-]{6,})/.exec(classOf(tagged));
+      if (match) return match[1] ?? null;
+    }
   }
 
+  // A watch link is the common case; the narrow selector finds it without
+  // materialising every anchor in the row.
+  const direct = idFromHref(row.querySelector('a[href*="v="]')?.getAttribute('href') ?? null);
+  if (direct) return direct;
+
   for (const link of Array.from(row.querySelectorAll('a[href]'))) {
-    const match = /[?&]v=([\w-]{11})(?:&|$)/.exec(link.getAttribute('href') ?? '');
-    if (match) return match[1] ?? null;
+    const id = idFromHref(link.getAttribute('href'));
+    if (id) return id;
   }
 
   const img = row.querySelector<HTMLImageElement>('img[src*="/vi/"]');
@@ -129,10 +144,21 @@ export function findSurface(kind: PageKind): Surface | null {
   }
   if (!group) return null;
 
-  const fallbackIds = megaLinkOrder();
+  // One probe decides for the whole surface: a container never mixes the two
+  // layouts, and the link fallback covers a row that somehow disagrees.
+  const first = group.rowEls[0];
+  const probeContentId = !!first && first.querySelector('[class*="content-id-"]') !== null;
+
+  // Resolved lazily: the mega-link scan is document-wide and finds nothing at
+  // all on /playlist and /watch, so it should not run unless a row needs it.
+  let fallbackIds: string[] | null | undefined;
   const rows: Row[] = [];
   group.rowEls.forEach((el, index) => {
-    const videoId = videoIdOf(el) ?? fallbackIds?.[index] ?? null;
+    let videoId = videoIdOf(el, probeContentId);
+    if (!videoId) {
+      if (fallbackIds === undefined) fallbackIds = megaLinkOrder();
+      videoId = fallbackIds?.[index] ?? null;
+    }
     if (videoId) rows.push({ el, videoId });
   });
 
@@ -140,9 +166,27 @@ export function findSurface(kind: PageKind): Surface | null {
   return { container: group.container, rows, anchor: findAnchor(kind) };
 }
 
-/** True while YouTube still has more pages of this playlist to append. */
-export function continuationSentinel(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(
-    'ytd-continuation-item-renderer, yt-continuation-item-view-model, ytm-continuation-item-renderer',
-  );
+const CONTINUATION_SELECTOR =
+  'ytd-continuation-item-renderer, yt-continuation-item-view-model, ytm-continuation-item-renderer';
+
+/** Ancestors that bound one playlist's own rows, used to scope the search below. */
+const SECTION_SELECTOR = [
+  'ytd-playlist-panel-renderer',
+  'ytm-playlist-panel-renderer',
+  'ytd-playlist-video-list-renderer',
+  'ytd-item-section-renderer',
+  'yt-item-section-renderer',
+].join(', ');
+
+/**
+ * True while YouTube still has more pages of *this* playlist to append.
+ *
+ * Scoped to the playlist's own section rather than the document: on a watch
+ * page the comment section has a continuation of its own, and it comes first in
+ * document order, so a document-wide search sends the loader scrolling into the
+ * comments while the playlist panel stays exactly as short as it was.
+ */
+export function continuationSentinel(surface: Surface | null): HTMLElement | null {
+  const section = surface?.container.closest<HTMLElement>(SECTION_SELECTOR);
+  return (section ?? document).querySelector<HTMLElement>(CONTINUATION_SELECTOR);
 }

@@ -3,15 +3,46 @@ import type { VideoMeta } from './store';
 import { warn } from './log';
 
 const FALLBACK_CLIENT_VERSION = '2.20240101.00.00';
-const CONCURRENCY = 4;
+/**
+ * These are ~10 KB same-origin POSTs on an already-warm connection, so the wait
+ * is round trips rather than bandwidth and the pass takes (count / this) x RTT.
+ * Held well short of what an uncredentialed caller can ask of YouTube: a 429
+ * here would throttle the user's ordinary browsing in every other tab too.
+ */
+const CONCURRENCY = 8;
 /** Publish dates are immutable; view counts are re-fetched after this long. */
 const VIEW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** `next` responses are ~400 KB, so only ever refine a handful per pass. */
 const REFINE_LIMIT = 15;
 const REFINE_CONCURRENCY = 2;
+/** How often results are persisted, so an interrupted pass is not wasted work. */
+const FLUSH_EVERY = 25;
+const FLUSH_MS = 2_000;
 
 /** Refinements tried this page session, so a failure is not retried in a loop. */
 const attempted = new Set<string>();
+
+/**
+ * Lookups already in the air, keyed by video id. Two passes overlap whenever a
+ * mode is toggled or rows arrive mid-fetch, and both want the same videos;
+ * joining the promise is free where a second request is not.
+ */
+const inflight = new Map<string, Promise<VideoMeta | null>>();
+
+/**
+ * Videos the endpoint answered about without producing the field we asked for:
+ * deleted, private, region-blocked, or simply not showing a view count. Nothing
+ * usable can be cached for them, so without this they stay in `missing` forever
+ * and every toggle re-fetches the whole set.
+ *
+ * Deliberately session-scoped rather than persisted: a throttled or bot-checked
+ * response is byte-identical to a deleted video, so a durable tombstone would
+ * let one bad minute poison a playlist with no way back. A reload re-checks.
+ */
+const barren = new Set<string>();
+
+/** Set when YouTube asks for less; the rest of the pass then drains without firing. */
+let throttled = false;
 
 export type MetaNeed = 'date' | 'views';
 
@@ -58,6 +89,17 @@ function innertubeConfig(): InnertubeConfig | null {
   return configCache;
 }
 
+function innertubeUrl(endpoint: 'player' | 'next', config: InnertubeConfig): string {
+  return `${location.origin}/youtubei/v1/${endpoint}?key=${encodeURIComponent(config.apiKey)}&prettyPrint=false`;
+}
+
+function innertubeBody(videoId: string, config: InnertubeConfig): string {
+  return JSON.stringify({
+    context: { client: { clientName: config.clientName, clientVersion: config.clientVersion, hl: 'en', gl: 'US' } },
+    videoId,
+  });
+}
+
 /**
  * Publish date and view count for one video. The player endpoint answers with a
  * ~10 KB payload whose microformat block carries both. Playability is
@@ -68,18 +110,19 @@ async function fetchMeta(videoId: string): Promise<VideoMeta | null> {
   const config = innertubeConfig();
   if (!config) return null;
   try {
-    const response = await fetch(
-      `${location.origin}/youtubei/v1/player?key=${encodeURIComponent(config.apiKey)}&prettyPrint=false`,
-      {
-        method: 'POST',
-        credentials: 'omit',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          context: { client: { clientName: config.clientName, clientVersion: config.clientVersion, hl: 'en', gl: 'US' } },
-          videoId,
-        }),
-      },
-    );
+    const response = await fetch(innertubeUrl('player', config), {
+      method: 'POST',
+      credentials: 'omit',
+      headers: { 'Content-Type': 'application/json' },
+      body: innertubeBody(videoId, config),
+    });
+    if (response.status === 429 || response.status === 503) {
+      // Stand down for the rest of the pass instead of retrying. More requests
+      // is the one thing that makes this worse, and the sort still lands using
+      // whatever is already known.
+      throttled = true;
+      return null;
+    }
     if (!response.ok) return null;
     const json = (await response.json()) as {
       microformat?: { playerMicroformatRenderer?: { publishDate?: string; uploadDate?: string; viewCount?: string } };
@@ -102,6 +145,21 @@ async function fetchMeta(videoId: string): Promise<VideoMeta | null> {
     warn('metadata lookup failed', videoId, err);
     return null;
   }
+}
+
+/**
+ * One request per video, however many passes want it. The raw result is shared,
+ * never the merged record: merging reads the calling pass's own view of the
+ * cache, and handing that snapshot to another pass could re-persist a stale
+ * date over a refinement.
+ */
+function dedupe(videoId: string): Promise<VideoMeta | null> {
+  let pending = inflight.get(videoId);
+  if (!pending) {
+    pending = fetchMeta(videoId).finally(() => inflight.delete(videoId));
+    inflight.set(videoId, pending);
+  }
+  return pending;
 }
 
 const RELATIVE_UNITS: Array<[RegExp, number]> = [
@@ -146,6 +204,21 @@ export function parseViewCount(text: string): number | null {
 export interface MetaProgress {
   done: number;
   total: number;
+  /** True once YouTube has asked us to back off; the pass finishes with what it has. */
+  throttled: boolean;
+}
+
+export interface MetaHooks {
+  onProgress?(progress: MetaProgress): void;
+  /**
+   * Fired with each batch of newly resolved values, so the visible order can
+   * converge as they land instead of snapping once at the end. A delta rather
+   * than the whole map: the caller blends these over the approximate values it
+   * scraped from the page, and handing it everything cached would overwrite a
+   * good approximation with a record that has no value for the field at all.
+   */
+  onBatch?(batch: Map<string, VideoMeta>): void;
+  shouldStop?(): boolean;
 }
 
 async function runPool<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
@@ -167,49 +240,89 @@ function isUsable(meta: VideoMeta | undefined, need: MetaNeed, now: number): boo
 }
 
 /**
+ * What is already known for these videos, with no network at all. Lets a sort
+ * land from the cache before the playlist has even finished loading, which on a
+ * revisit is the final answer arriving in a frame.
+ */
+export async function cachedMeta(videoIds: string[], need: MetaNeed): Promise<Map<string, VideoMeta>> {
+  const now = Date.now();
+  const meta = await getCachedMeta(Array.from(new Set(videoIds)));
+  for (const [id, value] of meta) {
+    if (!isUsable(value, need, now)) meta.delete(id);
+  }
+  return meta;
+}
+
+/**
  * Resolves metadata for a list of videos, hitting the network only for entries
  * the cache cannot satisfy for the requested field.
  */
 export async function resolveMeta(
   videoIds: string[],
   need: MetaNeed,
-  onProgress?: (progress: MetaProgress) => void,
-  shouldStop?: () => boolean,
+  hooks: MetaHooks = {},
 ): Promise<Map<string, VideoMeta>> {
   const unique = Array.from(new Set(videoIds));
   const now = Date.now();
   const meta = await getCachedMeta(unique);
-  const missing = unique.filter((id) => !isUsable(meta.get(id), need, now));
+  const missing = unique.filter((id) => !barren.has(id) && !isUsable(meta.get(id), need, now));
 
   if (missing.length === 0) {
-    onProgress?.({ done: unique.length, total: unique.length });
+    hooks.onProgress?.({ done: unique.length, total: unique.length, throttled: false });
     return meta;
   }
 
+  throttled = false;
   let done = unique.length - missing.length;
-  onProgress?.({ done, total: unique.length });
+  let reported = done;
+  let pending = new Map<string, VideoMeta>();
+  let flushedAt = Date.now();
+  hooks.onProgress?.({ done, total: unique.length, throttled });
 
-  const fetched = new Map<string, VideoMeta>();
+  const flush = (notify: boolean): Promise<void> => {
+    if (pending.size === 0) return Promise.resolve();
+    const batch = pending;
+    pending = new Map();
+    flushedAt = Date.now();
+    const written = cacheMeta(batch);
+    if (notify) hooks.onBatch?.(batch);
+    return written;
+  };
+
   await runPool(missing, CONCURRENCY, async (videoId) => {
-    if (!shouldStop?.()) {
-      const value = await fetchMeta(videoId);
+    // Checked outside the shared promise on purpose: resolving it as null for a
+    // torn-down pass would record a false miss for whoever else is waiting.
+    if (!throttled && !hooks.shouldStop?.()) {
+      const value = await dedupe(videoId);
       if (value) {
-        // Keep a known publish date if a later refresh fails to return one.
         const previous = meta.get(videoId);
         const merged: VideoMeta = {
-          publishedAt: value.publishedAt ?? previous?.publishedAt ?? null,
+          // The player endpoint reports the *upload* date, so it must never
+          // overwrite one already reconciled against YouTube's own label.
+          publishedAt: previous?.dateChecked
+            ? previous.publishedAt
+            : value.publishedAt ?? previous?.publishedAt ?? null,
           viewCount: value.viewCount ?? previous?.viewCount ?? null,
           fetchedAt: value.fetchedAt,
+          dateChecked: previous?.dateChecked === true,
+          refineAttemptedAt: previous?.refineAttemptedAt,
         };
         meta.set(videoId, merged);
-        fetched.set(videoId, merged);
+        pending.set(videoId, merged);
+        if (!isUsable(merged, need, now)) barren.add(videoId);
       }
     }
     done += 1;
-    onProgress?.({ done, total: unique.length });
+    if (pending.size >= FLUSH_EVERY || Date.now() - flushedAt >= FLUSH_MS) void flush(true);
+    // Progress rebuilds the menu, so it is reported on the flush cadence rather
+    // than per video — plus the last tick, so the status never sticks at 199/200.
+    if (done - reported >= FLUSH_EVERY || done === unique.length) {
+      reported = done;
+      hooks.onProgress?.({ done, total: unique.length, throttled });
+    }
   });
 
-  await cacheMeta(fetched);
+  await flush(false);
   return meta;
 }
 
@@ -268,39 +381,43 @@ const DISPLAYED_DATE_PATTERNS: RegExp[] = [
   /"accessibilityText":"([A-Z][a-z]{2}\s+\d{1,2},\s*\d{4})"/,
 ];
 
+interface DisplayedDate {
+  /**
+   * Whether YouTube actually answered. False means the request itself failed,
+   * which must not be remembered — a well-formed answer we could not read is a
+   * property of the video and is worth remembering.
+   */
+  answered: boolean;
+  date: number | null;
+}
+
 /**
  * Reads the date YouTube actually displays for a video. This costs a `next`
  * request, which is far heavier than `player`, so it is reserved for videos
  * whose label betrayed an upload/publish mismatch.
  */
-async function fetchDisplayedDate(videoId: string): Promise<number | null> {
+async function fetchDisplayedDate(videoId: string): Promise<DisplayedDate> {
   const config = innertubeConfig();
-  if (!config) return null;
+  if (!config) return { answered: false, date: null };
   try {
-    const response = await fetch(
-      `${location.origin}/youtubei/v1/next?key=${encodeURIComponent(config.apiKey)}&prettyPrint=false`,
-      {
-        method: 'POST',
-        credentials: 'omit',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          context: { client: { clientName: config.clientName, clientVersion: config.clientVersion, hl: 'en', gl: 'US' } },
-          videoId,
-        }),
-      },
-    );
-    if (!response.ok) return null;
+    const response = await fetch(innertubeUrl('next', config), {
+      method: 'POST',
+      credentials: 'omit',
+      headers: { 'Content-Type': 'application/json' },
+      body: innertubeBody(videoId, config),
+    });
+    if (!response.ok) return { answered: false, date: null };
     // Scanned as text: parsing the whole payload would be far more expensive.
     const raw = await response.text();
     for (const pattern of DISPLAYED_DATE_PATTERNS) {
       const value = pattern.exec(raw)?.[1];
       const parsed = value ? parseDateText(value) : null;
-      if (parsed !== null) return parsed;
+      if (parsed !== null) return { answered: true, date: parsed };
     }
-    return null;
+    return { answered: true, date: null };
   } catch (err) {
     warn('displayed date lookup failed', videoId, err);
-    return null;
+    return { answered: false, date: null };
   }
 }
 
@@ -312,8 +429,7 @@ async function fetchDisplayedDate(videoId: string): Promise<number | null> {
 export async function refineDisplayedDates(
   videoIds: string[],
   meta: Map<string, VideoMeta>,
-  onProgress?: (progress: MetaProgress) => void,
-  shouldStop?: () => boolean,
+  hooks: MetaHooks = {},
 ): Promise<{ refined: number; skipped: number }> {
   const targets = videoIds.filter((id) => !attempted.has(id)).slice(0, REFINE_LIMIT);
   const skipped = videoIds.length - targets.length;
@@ -324,24 +440,28 @@ export async function refineDisplayedDates(
   let refined = 0;
 
   await runPool(targets, REFINE_CONCURRENCY, async (videoId) => {
-    if (!shouldStop?.()) {
+    if (!hooks.shouldStop?.()) {
       attempted.add(videoId);
-      const displayed = await fetchDisplayedDate(videoId);
-      const previous = meta.get(videoId);
-      const next: VideoMeta = {
-        publishedAt: displayed ?? previous?.publishedAt ?? null,
-        viewCount: previous?.viewCount ?? null,
-        fetchedAt: previous?.fetchedAt ?? Date.now(),
-        dateChecked: displayed !== null,
-      };
-      if (displayed !== null) {
-        refined += 1;
+      const { answered, date } = await fetchDisplayedDate(videoId);
+      if (answered) {
+        const previous = meta.get(videoId);
+        const next: VideoMeta = {
+          publishedAt: date ?? previous?.publishedAt ?? null,
+          viewCount: previous?.viewCount ?? null,
+          fetchedAt: previous?.fetchedAt ?? Date.now(),
+          dateChecked: date !== null || previous?.dateChecked === true,
+          // Stamped even when nothing parsed. That is the whole point: a video
+          // whose displayed date this endpoint never exposes stops costing
+          // ~400 KB on every single visit.
+          refineAttemptedAt: Date.now(),
+        };
+        if (date !== null) refined += 1;
         meta.set(videoId, next);
         updated.set(videoId, next);
       }
     }
     done += 1;
-    onProgress?.({ done, total: targets.length });
+    hooks.onProgress?.({ done, total: targets.length, throttled });
   });
 
   await cacheMeta(updated);

@@ -117,6 +117,9 @@ export function computeOrder(rows: Row[], mode: SortMode, inputs: OrderInputs = 
   }
 }
 
+/** Past any row's position, so container furniture never floats into the list. */
+const PARKED_ORDER = 1_000_000;
+
 /**
  * Applies an order without touching the DOM tree: the container becomes a
  * column flexbox and each row gets a CSS `order`. YouTube's own re-renders
@@ -130,18 +133,35 @@ export function applyOrder(surface: Surface, orderedIds: string[]): void {
   });
 
   surface.container.setAttribute(CONTAINER_ATTR, '');
+  const tail = orderedIds.length;
   surface.rows.forEach((row, domIndex) => {
     row.el.setAttribute(ROW_ATTR, '');
-    row.el.style.setProperty('order', String(position.get(row.videoId) ?? orderedIds.length + domIndex));
+    row.el.style.setProperty('order', String(position.get(row.videoId) ?? tail + domIndex));
   });
+
+  // Whatever else shares the container — the "load more" spinner, a message
+  // renderer — keeps the flex default of 0 and would sit above a sorted list.
+  // Park it below everything. Anything still carrying ROW_ATTR was a row on a
+  // previous pass and keeps the position it had, rather than being exiled for
+  // having become momentarily unidentifiable; those stale positions are why the
+  // park value is a sentinel rather than counted off this pass's rows.
+  for (const child of Array.from(surface.container.children)) {
+    if (child instanceof HTMLElement && !child.hasAttribute(ROW_ATTR)) {
+      child.style.setProperty('order', String(PARKED_ORDER));
+    }
+  }
 }
 
 /** Puts the surface back exactly as YouTube rendered it. */
 export function clearOrder(surface: Surface): void {
   surface.container.removeAttribute(CONTAINER_ATTR);
-  for (const row of surface.rows) {
-    row.el.removeAttribute(ROW_ATTR);
-    row.el.style.removeProperty('order');
+  // Every child, not just the current rows: applyOrder also positions the
+  // spinner, and rows dropped since the last pass still carry an order.
+  for (const child of Array.from(surface.container.children)) {
+    if (child instanceof HTMLElement) {
+      child.removeAttribute(ROW_ATTR);
+      child.style.removeProperty('order');
+    }
   }
 }
 

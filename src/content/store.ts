@@ -95,6 +95,12 @@ export interface VideoMeta {
    * label, so the expensive second lookup is attempted at most once per video.
    */
   dateChecked?: boolean;
+  /**
+   * When that reconciliation was last attempted, successful or not. Some videos
+   * simply never expose a displayed date, and without this they cost a ~400 KB
+   * lookup on every fresh page load, forever.
+   */
+  refineAttemptedAt?: number;
 }
 
 interface StoredMeta {
@@ -102,23 +108,56 @@ interface StoredMeta {
   v?: number | null;
   t?: number;
   c?: boolean;
+  a?: number;
 }
 
+/**
+ * Everything read or written this page session. The content script survives
+ * YouTube's SPA navigations, so this is what turns a mode toggle, a
+ * continuation batch and a hop from /playlist to /watch into zero storage
+ * round trips instead of one per video per pass.
+ */
+const memo = new Map<string, VideoMeta>();
+
+/**
+ * Ids storage has already answered about, so a video it has never heard of is
+ * not asked about again. Another tab writing a record this tab has already
+ * probed is the one thing this misses; the cost is one duplicate lookup.
+ */
+const probed = new Set<string>();
+
+/**
+ * Cached metadata for these videos. The returned map is the caller's to mutate;
+ * records themselves are replaced wholesale rather than edited, so sharing them
+ * with the session memo is safe.
+ */
 export async function getCachedMeta(videoIds: string[]): Promise<Map<string, VideoMeta>> {
   const out = new Map<string, VideoMeta>();
-  if (videoIds.length === 0) return out;
+  const cold: string[] = [];
+  for (const id of videoIds) {
+    const hit = memo.get(id);
+    if (hit) out.set(id, hit);
+    else if (!probed.has(id)) cold.push(id);
+  }
+  if (cold.length === 0) return out;
+
   try {
-    const keys = videoIds.map((id) => META_PREFIX + id);
-    const found = await storage.get(keys);
-    for (const id of videoIds) {
+    const found = await storage.get(cold.map((id) => META_PREFIX + id));
+    for (const id of cold) {
+      // Marked inside the try: a read that threw has to be retried, not
+      // remembered as an absence.
+      probed.add(id);
       const raw = found[META_PREFIX + id] as StoredMeta | undefined;
       if (!raw) continue;
-      out.set(id, {
+      const value: VideoMeta = {
         publishedAt: typeof raw.p === 'number' ? raw.p : null,
         viewCount: typeof raw.v === 'number' ? raw.v : null,
         fetchedAt: typeof raw.t === 'number' ? raw.t : 0,
         dateChecked: raw.c === true,
-      });
+        refineAttemptedAt: typeof raw.a === 'number' ? raw.a : undefined,
+      };
+      memo.set(id, value);
+      out.set(id, value);
     }
   } catch (err) {
     warn('failed to read metadata cache', err);
@@ -128,13 +167,19 @@ export async function getCachedMeta(videoIds: string[]): Promise<Map<string, Vid
 
 export async function cacheMeta(meta: Map<string, VideoMeta>): Promise<void> {
   if (meta.size === 0) return;
+  const items: Record<string, unknown> = {};
+  // The memo is written through before the await, so a caller that reads back
+  // immediately sees the new values whether or not the disk write lands.
+  for (const [id, value] of meta) {
+    memo.set(id, value);
+    probed.add(id);
+    const stored: StoredMeta = {
+      p: value.publishedAt, v: value.viewCount, t: value.fetchedAt, c: value.dateChecked === true,
+    };
+    if (value.refineAttemptedAt !== undefined) stored.a = value.refineAttemptedAt;
+    items[META_PREFIX + id] = stored;
+  }
   try {
-    const items: Record<string, unknown> = {};
-    for (const [id, value] of meta) {
-      items[META_PREFIX + id] = {
-        p: value.publishedAt, v: value.viewCount, t: value.fetchedAt, c: value.dateChecked === true,
-      };
-    }
     await storage.set(items);
   } catch (err) {
     warn('failed to write metadata cache', err);
